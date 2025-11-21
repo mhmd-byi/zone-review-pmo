@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import jsPDF from 'jspdf';
 
 interface Review {
   _id: string;
@@ -31,10 +32,18 @@ export default function ReviewList() {
   const [filter, setFilter] = useState<string>('all');
   const [viewMode, setViewMode] = useState<'zone' | 'department'>('zone');
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [isSummarizing, setIsSummarizing] = useState(false);
+  const [summaryResult, setSummaryResult] = useState<any | null>(null);
 
   useEffect(() => {
     fetchReviews();
   }, []);
+
+  useEffect(() => {
+    console.log('=== SUMMARY RESULT STATE CHANGED ===');
+    console.log('summaryResult:', summaryResult);
+    console.log('isSummarizing:', isSummarizing);
+  }, [summaryResult, isSummarizing]);
 
   const fetchReviews = async () => {
     try {
@@ -65,6 +74,177 @@ export default function ReviewList() {
       }
       return newSet;
     });
+  };
+
+  const exportToPDF = () => {
+    console.log('=== EXPORTING TO PDF ===');
+    if (!summaryResult || summaryResult.error) {
+      console.error('No valid summary result to export');
+      return;
+    }
+
+    const doc = new jsPDF();
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const margin = 20;
+    const contentWidth = pageWidth - 2 * margin;
+    let yPosition = margin;
+
+    // Helper function to add new page if needed
+    const checkPageBreak = (requiredSpace: number) => {
+      if (yPosition + requiredSpace > pageHeight - margin) {
+        doc.addPage();
+        yPosition = margin;
+        return true;
+      }
+      return false;
+    };
+
+    // Helper function to split long text into lines
+    const splitText = (text: string, maxWidth: number) => {
+      return doc.splitTextToSize(text, maxWidth);
+    };
+
+    // Title
+    doc.setFontSize(20);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Zone Review PMO Report', pageWidth / 2, yPosition, { align: 'center' });
+    yPosition += 15;
+
+    // Scope
+    doc.setFontSize(12);
+    doc.setFont('helvetica', 'normal');
+    const scopeText = `Scope: ${summaryResult.scope.charAt(0).toUpperCase() + summaryResult.scope.slice(1)}-wise Analysis`;
+    doc.text(scopeText, margin, yPosition);
+    yPosition += 10;
+
+    // Date
+    doc.setFontSize(10);
+    doc.setTextColor(100);
+    doc.text(`Generated: ${new Date().toLocaleString()}`, margin, yPosition);
+    yPosition += 15;
+    doc.setTextColor(0);
+
+    // Process each group
+    (summaryResult.groups || []).forEach((group: any, groupIndex: number) => {
+      checkPageBreak(40);
+
+      // Group heading
+      doc.setFontSize(14);
+      doc.setFont('helvetica', 'bold');
+      doc.text(group.name, margin, yPosition);
+      yPosition += 8;
+
+      // Metrics
+      if (group.metrics) {
+        doc.setFontSize(9);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(80);
+        const metricsText = `Total: ${group.metrics.totalReviews} | Completed: ${group.metrics.completed || 0} | Draft: ${group.metrics.draft || 0}`;
+        doc.text(metricsText, margin, yPosition);
+        yPosition += 10;
+        doc.setTextColor(0);
+      }
+
+      // Key Themes
+      if (group.keyThemes && group.keyThemes.length > 0) {
+        checkPageBreak(30);
+        doc.setFontSize(11);
+        doc.setFont('helvetica', 'bold');
+        doc.text('Key Themes:', margin + 5, yPosition);
+        yPosition += 6;
+
+        doc.setFontSize(9);
+        doc.setFont('helvetica', 'normal');
+        group.keyThemes.forEach((theme: string) => {
+          checkPageBreak(15);
+          const lines = splitText(`• ${theme}`, contentWidth - 10);
+          lines.forEach((line: string) => {
+            doc.text(line, margin + 10, yPosition);
+            yPosition += 5;
+          });
+        });
+        yPosition += 3;
+      }
+
+      // Issues
+      if (group.issues && group.issues.length > 0) {
+        checkPageBreak(30);
+        doc.setFontSize(11);
+        doc.setFont('helvetica', 'bold');
+        doc.text('Issues:', margin + 5, yPosition);
+        yPosition += 6;
+
+        doc.setFontSize(9);
+        doc.setFont('helvetica', 'normal');
+        group.issues.forEach((issue: string) => {
+          checkPageBreak(15);
+          const lines = splitText(`• ${issue}`, contentWidth - 10);
+          lines.forEach((line: string) => {
+            doc.text(line, margin + 10, yPosition);
+            yPosition += 5;
+          });
+        });
+        yPosition += 3;
+      }
+
+      // Action Items
+      if (group.actionItems && group.actionItems.length > 0) {
+        checkPageBreak(30);
+        doc.setFontSize(11);
+        doc.setFont('helvetica', 'bold');
+        doc.text('Action Items:', margin + 5, yPosition);
+        yPosition += 6;
+
+        doc.setFontSize(9);
+        doc.setFont('helvetica', 'normal');
+        group.actionItems.forEach((action: string) => {
+          checkPageBreak(15);
+          const lines = splitText(`• ${action}`, contentWidth - 10);
+          lines.forEach((line: string) => {
+            doc.text(line, margin + 10, yPosition);
+            yPosition += 5;
+          });
+        });
+        yPosition += 3;
+      }
+
+      // Add spacing between groups
+      if (groupIndex < summaryResult.groups.length - 1) {
+        yPosition += 5;
+        checkPageBreak(10);
+        doc.setDrawColor(200);
+        doc.line(margin, yPosition, pageWidth - margin, yPosition);
+        yPosition += 10;
+      }
+    });
+
+    // Highlights
+    if (Array.isArray(summaryResult.highlights) && summaryResult.highlights.length > 0) {
+      checkPageBreak(40);
+      yPosition += 10;
+
+      doc.setFontSize(14);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Overall Highlights', margin, yPosition);
+      yPosition += 8;
+
+      doc.setFontSize(9);
+      doc.setFont('helvetica', 'normal');
+      summaryResult.highlights.forEach((highlight: string) => {
+        checkPageBreak(15);
+        const lines = splitText(`• ${highlight}`, contentWidth - 5);
+        lines.forEach((line: string) => {
+          doc.text(line, margin + 5, yPosition);
+          yPosition += 5;
+        });
+      });
+    }
+
+    // Save the PDF
+    const fileName = `Zone_Review_Report_${summaryResult.scope}_${new Date().toISOString().split('T')[0]}.pdf`;
+    doc.save(fileName);
+    console.log('✓ PDF exported:', fileName);
   };
 
   // Group reviews by zone
@@ -131,6 +311,64 @@ export default function ReviewList() {
             }`}
           >
             View by Department
+          </button>
+          <button
+            onClick={async () => {
+              console.log('=== GENERATE REPORT BUTTON CLICKED ===');
+              try {
+                console.log('1. Setting loading state...');
+                setIsSummarizing(true);
+                setSummaryResult(null);
+                
+                const scope = viewMode === 'zone' ? 'zone' : 'department';
+                console.log('2. Scope:', scope);
+                console.log('3. Sending API request to /api/reports/summarize');
+                
+                const res = await fetch('/api/reports/summarize', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ scope }),
+                });
+                
+                console.log('4. Response received');
+                console.log('Response status:', res.status, res.statusText);
+                console.log('Response ok:', res.ok);
+                
+                const json = await res.json();
+                console.log('5. Response JSON:', json);
+                
+                // Check if response contains an error
+                if (!res.ok || json.error) {
+                  console.error('❌ Error in response:', json);
+                  setSummaryResult({ 
+                    error: json.error || 'Failed to generate summary',
+                    details: json.details || json.error
+                  });
+                } else {
+                  console.log('✓ Success! Setting summary result');
+                  setSummaryResult(json);
+                }
+              } catch (e: any) {
+                console.error('❌ Exception caught:', e);
+                console.error('Error name:', e.name);
+                console.error('Error message:', e.message);
+                console.error('Error stack:', e.stack);
+                setSummaryResult({ 
+                  error: 'Network error', 
+                  details: e.message || 'Failed to connect to the server'
+                });
+              } finally {
+                console.log('6. Resetting loading state');
+                setIsSummarizing(false);
+                console.log('=== GENERATE REPORT COMPLETED ===');
+              }
+            }}
+            className="ml-auto px-4 py-2 rounded-lg font-medium bg-indigo-600 text-white hover:bg-indigo-700 disabled:bg-indigo-400"
+            disabled={isSummarizing}
+          >
+            {isSummarizing
+              ? (viewMode === 'zone' ? 'Summarizing Zones...' : 'Summarizing Departments...')
+              : (viewMode === 'zone' ? 'Generate Zone Report' : 'Generate Department Report')}
           </button>
         </div>
         
@@ -399,8 +637,100 @@ export default function ReviewList() {
         </div>
       )}
 
+      {/* Summary Result */}
+      {summaryResult && (
+        <div className="mt-6 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+          <div className="flex justify-between items-center mb-3">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Summary Report</h3>
+            {!summaryResult.error && (
+              <button
+                onClick={exportToPDF}
+                className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center gap-2 text-sm font-medium"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                Export to PDF
+              </button>
+            )}
+          </div>
+          {summaryResult.error ? (
+            <div className="space-y-2">
+              <div className="flex items-start gap-2">
+                <svg className="w-5 h-5 text-red-600 dark:text-red-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <div className="flex-1">
+                  <p className="text-red-600 dark:text-red-400 font-medium">{summaryResult.error}</p>
+                  {summaryResult.details && (
+                    <p className="text-sm text-red-500 dark:text-red-300 mt-1">{summaryResult.details}</p>
+                  )}
+                  <div className="mt-3 text-xs text-gray-600 dark:text-gray-400">
+                    <p className="font-semibold mb-1">Common causes:</p>
+                    <ul className="list-disc ml-5 space-y-1">
+                      <li>Invalid or expired Gemini API key</li>
+                      <li>API quota exceeded</li>
+                      <li>Rate limit exceeded</li>
+                      <li>Network connectivity issues</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <>
+              <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
+                Scope: <span className="font-medium">{summaryResult.scope}</span>
+              </p>
+              <div className="space-y-3">
+                {(summaryResult.groups || []).map((g: any, idx: number) => (
+                  <div key={idx} className="border border-gray-200 dark:border-gray-700 rounded-lg p-3">
+                    <div className="flex justify-between items-center mb-2">
+                      <h4 className="font-medium text-gray-900 dark:text-white">{g.name}</h4>
+                      {g.metrics && (
+                        <span className="text-xs text-gray-600 dark:text-gray-400">
+                          {g.metrics.totalReviews} total • {g.metrics.completed || 0} completed • {g.metrics.draft || 0} draft
+                        </span>
+                      )}
+                    </div>
+                    <div className="grid md:grid-cols-3 gap-3">
+                      <div>
+                        <p className="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1">Key Themes</p>
+                        <ul className="text-xs text-gray-600 dark:text-gray-400 list-disc ml-4">
+                          {(g.keyThemes || []).map((t: string, i: number) => (<li key={i}>{t}</li>))}
+                        </ul>
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1">Issues</p>
+                        <ul className="text-xs text-gray-600 dark:text-gray-400 list-disc ml-4">
+                          {(g.issues || []).map((t: string, i: number) => (<li key={i}>{t}</li>))}
+                        </ul>
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1">Action Items</p>
+                        <ul className="text-xs text-gray-600 dark:text-gray-400 list-disc ml-4">
+                          {(g.actionItems || []).map((t: string, i: number) => (<li key={i}>{t}</li>))}
+                        </ul>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {Array.isArray(summaryResult.highlights) && summaryResult.highlights.length > 0 && (
+                <div className="mt-3">
+                  <p className="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1">Highlights</p>
+                  <ul className="text-xs text-gray-600 dark:text-gray-400 list-disc ml-4">
+                    {summaryResult.highlights.map((h: string, i: number) => (<li key={i}>{h}</li>))}
+                  </ul>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
       {/* Review Detail Modal */}
-      {selectedReview && (
+      {selectedReview !== null && (
         <div
           className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50"
           onClick={() => setSelectedReview(null)}
