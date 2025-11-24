@@ -36,6 +36,7 @@ interface Answer {
 
 interface NewReviewFormProps {
   onSuccess: () => void;
+  editReviewId?: string | null;
 }
 
 const daysOfWeek = [
@@ -48,7 +49,7 @@ const daysOfWeek = [
   'Saturday'
 ];
 
-export default function NewReviewForm({ onSuccess }: NewReviewFormProps) {
+export default function NewReviewForm({ onSuccess, editReviewId }: NewReviewFormProps) {
   const [zones, setZones] = useState<{ _id: string; name: string }[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [questionsByDepartment, setQuestionsByDepartment] = useState<Record<string, Question[]>>({});
@@ -81,6 +82,12 @@ export default function NewReviewForm({ onSuccess }: NewReviewFormProps) {
     }
   }, [departments]);
 
+  useEffect(() => {
+    if (editReviewId && departments.length > 0) {
+      loadReviewForEdit();
+    }
+  }, [editReviewId, departments]);
+
   const fetchZonesAndDepartments = async () => {
     try {
       const [zonesRes, depsRes] = await Promise.all([
@@ -112,17 +119,109 @@ export default function NewReviewForm({ onSuccess }: NewReviewFormProps) {
         
         setQuestionsByDepartment(grouped);
         
-        // Initialize department reviews with one feedback entry per department
-        const initialReviews: DepartmentReview[] = departments.map(dept => ({
-          departmentId: dept._id,
-          departmentName: dept.name,
-          feedbacks: [createNewFeedbackEntry()]
-        }));
-        
-        setDepartmentReviews(initialReviews);
+        // Only initialize if not editing
+        if (!editReviewId) {
+          // Initialize department reviews with one feedback entry per department
+          const initialReviews: DepartmentReview[] = departments.map(dept => ({
+            departmentId: dept._id,
+            departmentName: dept.name,
+            feedbacks: [createNewFeedbackEntry()]
+          }));
+          
+          setDepartmentReviews(initialReviews);
+        }
       }
     } catch (error) {
       console.error('Error fetching questions:', error);
+    }
+  };
+
+  const loadReviewForEdit = async () => {
+    console.log('=== LOADING REVIEW FOR EDIT ===');
+    console.log('Edit Review ID:', editReviewId);
+    
+    try {
+      const response = await fetch(`/api/reviews/${editReviewId}`);
+      console.log('Fetch response status:', response.status);
+      
+      if (response.ok) {
+        const review = await response.json();
+        console.log('Loaded review data:', review);
+        
+        // Populate basic fields
+        setReviewDate(review.reviewDate.split('T')[0]);
+        setDay(review.day);
+        setSelectedZone(review.zoneId || '');
+        setVenue(review.venue || '');
+        setAamil(review.aamil || '');
+        setZonalHead(review.zonalHead || '');
+        setZoneCapacity(review.zoneCapacity?.toString() || '');
+        setMumineenCount(review.mumineenCount?.toString() || '');
+        setThaalCount(review.thaalCount?.toString() || '');
+        setOverallNotes(review.overallNotes || '');
+        setStatus(review.status || 'draft');
+        
+        console.log('Basic fields populated');
+        console.log('Review answers:', review.answers);
+        console.log('Departments:', departments);
+        
+        // Group answers by department - using departmentId from the review
+        const deptReviewsMap = new Map<string, string[]>();
+        
+        // Each answer has the same feedback for all questions in that department
+        // We need to extract unique feedbacks per department
+        review.answers?.forEach((answer: any) => {
+          // Find department by name since answers don't have departmentId
+          const dept = departments.find(d => d.name === review.departmentName);
+          if (dept) {
+            if (!deptReviewsMap.has(dept._id)) {
+              deptReviewsMap.set(dept._id, []);
+            }
+            // Add feedback if it's not already added
+            const existingFeedbacks = deptReviewsMap.get(dept._id)!;
+            if (!existingFeedbacks.includes(answer.answer)) {
+              existingFeedbacks.push(answer.answer);
+            }
+          }
+        });
+        
+        console.log('Department reviews map:', Array.from(deptReviewsMap.entries()));
+        
+        // Create department reviews structure
+        const loadedReviews: DepartmentReview[] = departments.map(dept => {
+          const feedbacks = deptReviewsMap.get(dept._id) || [];
+          const feedbackEntries = feedbacks.length > 0 
+            ? feedbacks.map(feedback => ({
+                id: Math.random().toString(36).substr(2, 9),
+                feedback: feedback
+              }))
+            : [createNewFeedbackEntry()];
+          
+          return {
+            departmentId: dept._id,
+            departmentName: dept.name,
+            feedbacks: feedbackEntries
+          };
+        });
+        
+        console.log('Loaded department reviews:', loadedReviews);
+        setDepartmentReviews(loadedReviews);
+        
+        // Expand the department that has the review
+        const deptWithReview = departments.find(d => d.name === review.departmentName);
+        if (deptWithReview) {
+          setExpandedDepartments(new Set([deptWithReview._id]));
+          console.log('Expanded department:', deptWithReview.name);
+        }
+        
+        console.log('✓ Review loaded successfully');
+      } else {
+        console.error('Failed to fetch review, status:', response.status);
+        setError('Failed to load review for editing');
+      }
+    } catch (error) {
+      console.error('Error loading review for edit:', error);
+      setError('Failed to load review for editing');
     }
   };
 
@@ -202,58 +301,109 @@ export default function NewReviewForm({ onSuccess }: NewReviewFormProps) {
     const zone = zones.find((z) => z._id === selectedZone);
 
     try {
-      // Submit each department review entry separately
-      const allPromises: Promise<any>[] = [];
-      
-      departmentReviews.forEach(deptReview => {
-        const questions = questionsByDepartment[deptReview.departmentId] || [];
+      if (editReviewId) {
+        // Update existing review
+        const allAnswers: any[] = [];
         
-        deptReview.feedbacks.forEach(feedbackEntry => {
-          if (feedbackEntry.feedback.trim() !== '') {
-            // Create answers array from questions with the same feedback
-            const answers = questions.map(q => ({
-              questionId: q._id,
-              questionText: q.text,
-              answer: feedbackEntry.feedback,
-              rating: undefined,
-            }));
-            
-            const reviewData = {
-              zoneId: selectedZone,
-              zoneName: zone?.name,
-              departmentId: deptReview.departmentId,
-              departmentName: deptReview.departmentName,
-              reviewDate,
-              day,
-              venue,
-              aamil: aamil || undefined,
-              zonalHead: zonalHead || undefined,
-              zoneCapacity: zoneCapacity ? parseInt(zoneCapacity) : undefined,
-              mumineenCount: mumineenCount ? parseInt(mumineenCount) : undefined,
-              thaalCount: thaalCount ? parseInt(thaalCount) : undefined,
-              answers,
-              overallNotes,
-              status,
-            };
-            
-            allPromises.push(
-              fetch('/api/reviews', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(reviewData),
-              })
-            );
-          }
+        departmentReviews.forEach(deptReview => {
+          const questions = questionsByDepartment[deptReview.departmentId] || [];
+          
+          deptReview.feedbacks.forEach(feedbackEntry => {
+            if (feedbackEntry.feedback.trim() !== '') {
+              questions.forEach(q => {
+                allAnswers.push({
+                  questionId: q._id,
+                  questionText: q.text,
+                  departmentName: deptReview.departmentName,
+                  answer: feedbackEntry.feedback,
+                  rating: undefined,
+                });
+              });
+            }
+          });
         });
-      });
-
-      const results = await Promise.all(allPromises);
-      const allSuccess = results.every(r => r.ok);
-      
-      if (allSuccess) {
-        onSuccess();
+        
+        const reviewData = {
+          zoneId: selectedZone,
+          zoneName: zone?.name,
+          reviewDate,
+          day,
+          venue,
+          aamil: aamil || undefined,
+          zonalHead: zonalHead || undefined,
+          zoneCapacity: zoneCapacity ? parseInt(zoneCapacity) : undefined,
+          mumineenCount: mumineenCount ? parseInt(mumineenCount) : undefined,
+          thaalCount: thaalCount ? parseInt(thaalCount) : undefined,
+          answers: allAnswers,
+          overallNotes,
+          status,
+        };
+        
+        const response = await fetch(`/api/reviews/${editReviewId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(reviewData),
+        });
+        
+        if (response.ok) {
+          onSuccess();
+        } else {
+          setError('Failed to update review. Please try again.');
+        }
       } else {
-        setError('Some reviews failed to submit. Please try again.');
+        // Create new reviews (existing logic)
+        const allPromises: Promise<any>[] = [];
+        
+        departmentReviews.forEach(deptReview => {
+          const questions = questionsByDepartment[deptReview.departmentId] || [];
+          
+          deptReview.feedbacks.forEach(feedbackEntry => {
+            if (feedbackEntry.feedback.trim() !== '') {
+              // Create answers array from questions with the same feedback
+              const answers = questions.map(q => ({
+                questionId: q._id,
+                questionText: q.text,
+                answer: feedbackEntry.feedback,
+                rating: undefined,
+              }));
+              
+              const reviewData = {
+                zoneId: selectedZone,
+                zoneName: zone?.name,
+                departmentId: deptReview.departmentId,
+                departmentName: deptReview.departmentName,
+                reviewDate,
+                day,
+                venue,
+                aamil: aamil || undefined,
+                zonalHead: zonalHead || undefined,
+                zoneCapacity: zoneCapacity ? parseInt(zoneCapacity) : undefined,
+                mumineenCount: mumineenCount ? parseInt(mumineenCount) : undefined,
+                thaalCount: thaalCount ? parseInt(thaalCount) : undefined,
+                answers,
+                overallNotes,
+                status,
+              };
+              
+              allPromises.push(
+                fetch('/api/reviews', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(reviewData),
+                })
+              );
+            }
+          });
+        });
+
+        const results = await Promise.all(allPromises);
+        const allSuccess = results.every(r => r.ok);
+        
+        if (allSuccess) {
+          onSuccess();
+        } else {
+          setError('Some reviews failed to submit. Please try again.');
+        }
       }
     } catch (error) {
       setError('An error occurred. Please try again.');
@@ -265,7 +415,7 @@ export default function NewReviewForm({ onSuccess }: NewReviewFormProps) {
   return (
     <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
       <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-6">
-        Create New Review
+        {editReviewId ? 'Edit Review' : 'Create New Review'}
       </h2>
 
       {error && (
